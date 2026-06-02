@@ -192,18 +192,40 @@ def invert_radial_radius(
     rd: np.ndarray,
     k1: float,
     k2: float,
-    iterations: int = 8,
-) -> np.ndarray:
-    """Solve rd = r * (1 + k1*r^2 + k2*r^4) for r with Newton iterations."""
-    r = rd.copy()
+    max_r: float,
+    iterations: int = 32,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Solve rd = r * (1 + k1*r^2 + k2*r^4) on the central monotonic branch."""
+    if max_r <= 0.0:
+        raise ValueError("Maximum radius must be positive.")
+
+    upper = max_r
+    if k2 == 0.0 and k1 < 0.0:
+        upper = min(upper, float(np.sqrt(-1.0 / (3.0 * k1))))
+
+    upper_rd = upper * (1.0 + k1 * upper * upper + k2 * upper**4)
+    valid = rd <= upper_rd + 1e-9
+
+    low = np.zeros_like(rd, dtype=np.float64)
+    high = np.full_like(rd, upper, dtype=np.float64)
     for _ in range(iterations):
-        r2 = r * r
-        r4 = r2 * r2
-        f = r * (1.0 + k1 * r2 + k2 * r4) - rd
-        df = 1.0 + 3.0 * k1 * r2 + 5.0 * k2 * r4
-        safe_df = np.where(np.abs(df) < 1e-12, 1e-12, df)
-        r = np.maximum(r - f / safe_df, 0.0)
-    return r
+        mid = 0.5 * (low + high)
+        mid2 = mid * mid
+        mid_rd = mid * (1.0 + k1 * mid2 + k2 * mid2 * mid2)
+        low = np.where(mid_rd <= rd, mid, low)
+        high = np.where(mid_rd > rd, mid, high)
+
+    return 0.5 * (low + high), valid
+
+
+def max_normalized_radius(width: int, height: int, fx: float, fy: float, cx: float, cy: float) -> float:
+    corners = (
+        (0.5, 0.5),
+        (width - 0.5, 0.5),
+        (0.5, height - 0.5),
+        (width - 0.5, height - 0.5),
+    )
+    return max(np.hypot((x - cx) / fx, (y - cy) / fy) for x, y in corners)
 
 
 def distortion_maps(
@@ -224,13 +246,15 @@ def distortion_maps(
     yd = (ys.astype(np.float64) - cy) / fy
     rd = np.hypot(xd, yd)
 
-    r = invert_radial_radius(rd, k1, k2)
+    max_r = max_normalized_radius(width, height, fx, fy, cx, cy)
+    r, invert_valid = invert_radial_radius(rd, k1, k2, max_r)
     scale = np.divide(r, rd, out=np.ones_like(rd), where=rd > 1e-12)
 
     src_x = (cx + fx * xd * scale - 0.5).astype(np.float32)
     src_y = (cy + fy * yd * scale - 0.5).astype(np.float32)
     valid = (
-        (src_x >= 0.0)
+        invert_valid
+        & (src_x >= 0.0)
         & (src_x <= width - 1.0)
         & (src_y >= 0.0)
         & (src_y <= height - 1.0)
@@ -256,7 +280,8 @@ def final_k1_maps(
     y_final = (ys.astype(np.float64) - cy) / fy
     r_final = np.hypot(x_final, y_final)
 
-    r_undistorted = invert_radial_radius(r_final, k1_final, 0.0)
+    max_r = max_normalized_radius(width, height, fx, fy, cx, cy)
+    r_undistorted, invert_valid = invert_radial_radius(r_final, k1_final, 0.0, max_r)
     final_scale = np.divide(
         r_undistorted,
         r_final,
@@ -271,7 +296,8 @@ def final_k1_maps(
     src_x = (cx + fx * x_undistorted * input_scale - 0.5).astype(np.float32)
     src_y = (cy + fy * y_undistorted * input_scale - 0.5).astype(np.float32)
     valid = (
-        (src_x >= 0.0)
+        invert_valid
+        & (src_x >= 0.0)
         & (src_x <= width - 1.0)
         & (src_y >= 0.0)
         & (src_y <= height - 1.0)
@@ -280,10 +306,34 @@ def final_k1_maps(
 
 
 def valid_crop(mask: np.ndarray) -> tuple[slice, slice]:
-    rows, cols = np.where(mask)
-    if rows.size == 0 or cols.size == 0:
+    best_area = 0
+    best_top = 0
+    best_left = 0
+    best_bottom = 0
+    best_right = 0
+    heights = np.zeros(mask.shape[1], dtype=np.int32)
+
+    for bottom, row in enumerate(mask):
+        heights = np.where(row, heights + 1, 0)
+        stack: list[int] = []
+        for col in range(mask.shape[1] + 1):
+            current_height = int(heights[col]) if col < mask.shape[1] else 0
+            while stack and current_height < heights[stack[-1]]:
+                height = int(heights[stack.pop()])
+                left = stack[-1] + 1 if stack else 0
+                width = col - left
+                area = height * width
+                if area > best_area:
+                    best_area = area
+                    best_top = bottom - height + 1
+                    best_left = left
+                    best_bottom = bottom + 1
+                    best_right = col
+            stack.append(col)
+
+    if best_area == 0:
         raise ValueError("No valid pixels remain after distortion.")
-    return slice(rows.min(), rows.max() + 1), slice(cols.min(), cols.max() + 1)
+    return slice(best_top, best_bottom), slice(best_left, best_right)
 
 
 def distort_image(

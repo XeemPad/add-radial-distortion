@@ -73,8 +73,8 @@ You can also pass the target directly:
 .venv/bin/python add_rad_distortion.py images distorted --k1-input 0.05 --k1-final -0.05 --f 1200
 ```
 
-Crop to the rectangle where every output pixel is sampled from real input
-pixels:
+Crop to the largest axis-aligned rectangle where every output pixel is sampled
+from real input pixels:
 
 ```bash
 .venv/bin/python add_rad_distortion.py images distorted --k1 -0.1 --f 1200 --crop-valid
@@ -83,3 +83,27 @@ pixels:
 If `--f`, `--fx`, and `--fy` are not provided, the script uses
 `fx = fy = max(width, height)`. If `--cx` or `--cy` are not provided, it uses
 `width / 2` and `height / 2`.
+
+## GCP coordinates
+
+Transform the 4th and 5th whitespace-separated fields in a GCP list with the
+same radial model. If GCP coordinates are marked on full-resolution images, but
+the distorted images are resized, pass both sizes. The script first maps GCP
+coordinates to the resized image and then applies distortion:
+
+```bash
+.venv/bin/python add_rad_distortion_to_gcp.py My_GCP/gcp_list.txt My_GCP/gcp_list_distorted.txt --k1-input 0.01 --k1-delta -0.5 --f 1679 --cx 1065 --cy 694
+```
+
+Full-resolution GCP coordinates to resized distorted images:
+
+```bash
+.venv/bin/python add_rad_distortion_to_gcp.py My_GCP/gcp_list.txt My_GCP/gcp_list_distorted.txt --k1-input 0.01 --k1-delta -0.5 --f 1679 --cx 1065 --cy 694 --input-width 5472 --input-height 3648 --image-width 2120 --image-height 1413
+```
+
+If the distorted images were saved with `--crop-valid`, pass the original image
+size and resized image size so the script can subtract the same crop offset:
+
+```bash
+.venv/bin/python add_rad_distortion_to_gcp.py My_GCP/gcp_list.txt My_GCP/gcp_list_distorted.txt --k1-input 0.01 --k1-delta -0.5 --f 1679 --cx 1065 --cy 694 --input-width 5472 --input-height 3648 --image-width 2120 --image-height 1413 --crop-valid
+```
