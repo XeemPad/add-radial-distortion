@@ -1,6 +1,6 @@
 # Add radial distortion to images
 
-Tool to add radial distortion ($ k_1 \cdot r^2 $ only) to a set of images.
+Tool to add radial distortion (`k1` only) to a set of images.
 
 Uses the COLMAP `SIMPLE_RADIAL` / `RADIAL` convention for one shared focal
 length, and the same normalized-coordinate convention with `fx`, `fy` for
